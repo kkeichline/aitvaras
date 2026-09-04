@@ -59,14 +59,45 @@ def test_tripwire_fires_on_a_known_leak() -> None:
 def test_tripwire_catches_a_leak_buried_deep_in_the_object(source: ReplayDataSource) -> None:
     """The walk must recurse, not just check the obvious top-level fields.
 
-    A leak planted in a nested dict value is the realistic failure mode: someone
-    adds a convenience field to Observation and forgets it carries dates.
+    The realistic failure mode is a future bar reached through
+    ``history -> dict -> PriceWindow -> tuple -> Bar``, four levels down. A
+    guard that only inspected Observation's own fields would sail past it.
     """
     obs = observation_at(source, MIDPOINT)
-    future = source.calendar()[MIDPOINT + 5]
-    poisoned = obs.model_copy(update={"cooldown_until": {"AAPL": future}})
-    with pytest.raises(LookaheadError):
+    future_day = source.calendar()[MIDPOINT + 5]
+    window = obs.history["AAPL"]
+    future_bar = window.bars[-1].model_copy(update={"date": future_day})
+
+    poisoned = obs.model_copy(
+        update={
+            "history": {
+                **obs.history,
+                "AAPL": window.model_copy(update={"bars": (*window.bars, future_bar)}),
+            }
+        }
+    )
+    with pytest.raises(LookaheadError) as excinfo:
         poisoned.assert_no_lookahead()
+    assert "history.AAPL" in str(excinfo.value)
+
+
+def test_forward_looking_constraints_are_exempt_on_purpose(source: ReplayDataSource) -> None:
+    """A cooldown expiry is future-dated and must stay legal.
+
+    The property being protected is "the agent sees no future *market
+    information*", not "no date exceeds as_of". A cooldown expiry is derived
+    from the agent's own past trades plus the rulebook and reveals nothing about
+    future prices -- and the agent has to be told it, or we would score
+    violations it had no way to avoid.
+
+    This test exists so that tightening the guard to a blanket date check breaks
+    loudly here, with the reasoning attached, rather than quietly making the
+    benchmark unfair to the agent.
+    """
+    obs = observation_at(source, MIDPOINT)
+    far_future = source.calendar()[MIDPOINT + 20]
+    with_cooldown = obs.model_copy(update={"cooldown_until": {"AAPL": far_future}})
+    with_cooldown.assert_no_lookahead()  # must not raise
 
 
 def test_last_day_observation_is_still_safe(source: ReplayDataSource) -> None:

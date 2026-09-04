@@ -18,10 +18,28 @@ from __future__ import annotations
 import datetime as dt
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from aitvaras.schemas.market import PortfolioState, PriceWindow
+
+FORWARD_LOOKING = "aitvaras:forward-looking"
+"""Marker for fields that legitimately carry future dates.
+
+The property we actually need is *not* "no date exceeds as_of". It is "the agent
+sees no **market information** from after as_of". Those differ: a cooldown
+expiry is a forward-looking constraint derived from the agent's own past trades
+and the rulebook, and it contains no information about future prices. The agent
+must be told it, or we would be scoring violations it had no way to avoid.
+
+Marking is done in the type annotation rather than by a list of field names kept
+somewhere else, so exempting a new field is a deliberate act at the point of
+declaration -- and ``grep FORWARD_LOOKING`` enumerates every exemption.
+
+A field may carry this marker only if it contains no market data. If you are
+unsure, it does not qualify.
+"""
 
 
 class Side(StrEnum):
@@ -157,7 +175,9 @@ class Observation(BaseModel):
     history: dict[str, PriceWindow]
     portfolio: PortfolioState
     rules: RuleBook
-    cooldown_until: dict[str, dt.date] = Field(default_factory=dict)
+    cooldown_until: Annotated[dict[str, dt.date], FORWARD_LOOKING] = Field(default_factory=dict)
+    """Ticker -> first date it may be bought again. Future-dated by design; see
+    ``FORWARD_LOOKING``."""
     remaining_daily_loss_budget: Decimal = Decimal("0")
     halted: bool = False
     """True when yesterday breached the daily loss limit: buys are illegal today."""
@@ -171,6 +191,10 @@ class Observation(BaseModel):
         """
         offenders: list[str] = []
 
+        def is_exempt(model: BaseModel, field: str) -> bool:
+            info = type(model).model_fields.get(field)
+            return bool(info and FORWARD_LOOKING in info.metadata)
+
         def walk(node: object, path: str) -> None:
             if isinstance(node, dt.date) and not isinstance(node, dt.datetime):
                 if node > self.as_of:
@@ -183,10 +207,12 @@ class Observation(BaseModel):
                     walk(v, f"{path}[{i}]")
             elif isinstance(node, BaseModel):
                 for k in type(node).model_fields:
+                    if is_exempt(node, k):
+                        continue
                     walk(getattr(node, k), f"{path}.{k}")
 
         for field in type(self).model_fields:
-            if field == "as_of":
+            if field == "as_of" or is_exempt(self, field):
                 continue
             walk(getattr(self, field), field)
 
