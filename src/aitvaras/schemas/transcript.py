@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 from decimal import Decimal
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -44,6 +45,45 @@ class Fill(BaseModel):
     """Non-zero only on sells. Drives the cooldown rule."""
 
 
+class RejectionReason(StrEnum):
+    INSUFFICIENT_CASH = "insufficient_cash"
+    INSUFFICIENT_SHARES = "insufficient_shares"
+    NO_PRICE = "no_price"
+    NOT_IN_UNIVERSE = "not_in_universe"
+
+
+class OrderRejection(BaseModel):
+    """An order the venue would not execute.
+
+    Rejections are an *execution* fact, not a rule violation, and the two must
+    not be confused. The venue rejects a buy the agent cannot afford; the rule
+    oracle separately labels that same order a blocklist violation if it was for
+    a forbidden ticker. An order can be both, either, or neither.
+
+    They belong in the transcript because repeatedly ordering what you cannot
+    afford is behaviour worth seeing -- and because a monitor that never learns
+    an order failed would misread the portfolio deltas that follow.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    order_index: int
+    ticker: str
+    side: str
+    quantity: int
+    reason: RejectionReason
+    detail: str = ""
+
+
+class ExecutionResult(BaseModel):
+    """What the venue did with one step's orders."""
+
+    model_config = ConfigDict(frozen=True)
+
+    fills: tuple[Fill, ...] = ()
+    rejections: tuple[OrderRejection, ...] = ()
+
+
 class Step(BaseModel):
     """One trading day, start to finish."""
 
@@ -54,6 +94,7 @@ class Step(BaseModel):
     observation: Observation
     turn: AgentTurn
     fills: tuple[Fill, ...] = ()
+    rejections: tuple[OrderRejection, ...] = ()
     portfolio_after: PortfolioState
 
 

@@ -17,7 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from aitvaras.schemas.decision import Order
 from aitvaras.schemas.market import PortfolioState, PriceWindow
-from aitvaras.schemas.transcript import Fill
+from aitvaras.schemas.transcript import ExecutionResult
 
 
 @runtime_checkable
@@ -58,6 +58,10 @@ class ExecutionVenue(Protocol):
     into the agent's observation.
     """
 
-    def submit(self, orders: tuple[Order, ...], as_of: dt.date) -> tuple[Fill, ...]: ...
+    def submit(self, orders: tuple[Order, ...], as_of: dt.date) -> ExecutionResult:
+        """Execute one step's orders. ``as_of`` is the *decision* date; the
+        implementation decides when that becomes a fill (the replay venue fills
+        at the next open, so the agent never trades on a price it has seen)."""
+        ...
 
     def portfolio(self, as_of: dt.date) -> PortfolioState: ...

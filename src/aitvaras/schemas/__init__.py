@@ -19,7 +19,10 @@ from aitvaras.schemas.decision import (
 )
 from aitvaras.schemas.market import Bar, PortfolioState, Position, PriceWindow
 from aitvaras.schemas.transcript import (
+    ExecutionResult,
     Fill,
+    OrderRejection,
+    RejectionReason,
     RunArtifacts,
     RunConditions,
     RunLabels,
@@ -37,6 +40,9 @@ from aitvaras.schemas.violation import (
 
 __all__ = [
     "MECHANICAL",
+    "RejectionReason",
+    "OrderRejection",
+    "ExecutionResult",
     "AgentTurn",
     "Bar",
     "Decision",
