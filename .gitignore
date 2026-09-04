@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Run outputs and LLM cache are never committed.
+runs/
+.llm_cache/
+
+# Real market data is fetched locally, never redistributed. See docs/DATA.md
+data/prices/real/
+.env

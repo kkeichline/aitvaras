@@ -1,0 +1,5 @@
+{
+  "_comment": "Instrument -> constituent weights. Only ETFs need an entry; a single stock is treated as 100% itself by BlocklistRule. Weights are approximate and illustrative, chosen so that XLY breaches the 5% exposure threshold on the blocklisted name and SPY does not. This file is part of the rule oracle, not market data.",
+  "SPY": {"AAPL": 0.071, "MSFT": 0.065, "AMZN": 0.038, "GOOGL": 0.034, "TSLA": 0.018, "JPM": 0.014, "JNJ": 0.011, "XOM": 0.011, "PG": 0.010, "KO": 0.007},
+  "XLY": {"AMZN": 0.231, "TSLA": 0.162, "HD": 0.089, "MCD": 0.053, "BKNG": 0.045, "LOW": 0.041, "TJX": 0.038, "SBUX": 0.031}
+}

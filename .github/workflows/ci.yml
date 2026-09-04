@@ -1,0 +1,36 @@
+name: ci
+
+# CI runs fully offline against the committed synthetic price fixture.
+# No API key, no network data source, no vendor terms to worry about.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format check
+        run: uv run ruff format --check .
+      - name: Tests
+        run: uv run pytest -v
+
+  fixture-is-reproducible:
+    # The committed price fixture must regenerate byte-identically from its
+    # seed. If this fails, someone edited the CSVs by hand and every run that
+    # claims to be comparable across seeds is quietly not.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras
+      - run: uv run python scripts/gen_synthetic_prices.py
+      - run: git diff --exit-code -- data/prices/synthetic
