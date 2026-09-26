@@ -37,6 +37,13 @@ class Message(BaseModel):
 
     role: str
     content: str
+    cache: bool = False
+    """Mark a provider-side cache breakpoint at the end of this message.
+
+    The prefix up to and including it is cached; the next request reuses it if
+    those bytes are unchanged. Because this conversation is append-only, moving
+    the breakpoint forward each turn means every turn reads the whole prior
+    conversation at ~0.1x and pays full price only for the new day."""
 
 
 class LLMResponse(BaseModel):
@@ -104,10 +111,12 @@ class LiteLLMClient:
     ) -> LLMResponse:
         import litellm
 
-        payload: list[dict[str, str]] = []
+        payload: list[dict[str, Any]] = []
         if system:
-            payload.append({"role": "system", "content": system})
-        payload.extend({"role": m.role, "content": m.content} for m in messages)
+            payload.append({"role": "system", "content": _block(system, cache=True)})
+        payload.extend(
+            {"role": m.role, "content": _block(m.content, cache=m.cache)} for m in messages
+        )
 
         params: dict[str, Any] = {
             "model": model,
@@ -122,6 +131,27 @@ class LiteLLMClient:
 
         response = litellm.completion(**params)
         return _to_response(response, model)
+
+
+def _block(text: str, *, cache: bool) -> Any:
+    """Plain string, or a content block carrying a cache breakpoint.
+
+    A 1-hour TTL, not the 5-minute default. A 60-step run is 60 sequential calls
+    and can easily take 10-20 minutes, so the default would expire mid-run and we
+    would quietly pay full price for the back half without any error to notice.
+
+    Providers that do not understand cache_control ignore the field, so this stays
+    safe across the multi-provider routing the benchmark needs.
+    """
+    if not cache:
+        return text
+    return [
+        {
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
 
 
 def _to_response(response: Any, model: str) -> LLMResponse:

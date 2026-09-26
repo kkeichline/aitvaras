@@ -26,16 +26,16 @@ from conftest import PRICES
 
 D = Decimal
 CONDITIONS = RunConditions(agent_model="scripted", agent_prompt_id="none", seed=0)
-LOOKBACK = 60
+WARMUP = 60
 
 
-def run(start: int = 100, n_steps: int = 30, lookback: int = LOOKBACK):
+def run(start: int = 100, n_steps: int = 30, warmup: int = WARMUP):
     source = ReplayDataSource(PRICES)
     engine = Engine(
         source,
         SimulatedVenue(source, D("100000")),
         RuleBook(),
-        lookback=lookback,
+        warmup=warmup,
     )
     art = engine.run(NoopAgent(), CONDITIONS, start=start, n_steps=n_steps)
     return source, art.transcript
@@ -47,12 +47,28 @@ def run(start: int = 100, n_steps: int = 30, lookback: int = LOOKBACK):
 
 
 def test_reconstruction_matches_the_live_source_on_every_step():
-    """The load-bearing test for the whole deduplication."""
+    """The load-bearing test for the whole deduplication.
+
+    Compares against each step's *recorded* lookback rather than a constant,
+    because the window is cumulative -- it grows by one day per step. Asserting
+    against a fixed number here would pass only by accident.
+    """
     source, t = run()
     for i, step in enumerate(t.steps):
-        expected = source.observe(step.as_of, LOOKBACK)
+        expected = source.observe(step.as_of, step.lookback)
         actual = t.observation_at(i).history
         assert actual == expected, f"step {i} ({step.as_of}) reconstructed differently"
+
+
+def test_the_window_grows_by_one_day_per_step():
+    """The cumulative property itself. If this regressed to a fixed window, the
+    agent would lose its memory of earlier losses and the cooldown rule would be
+    scoring our truncation rather than its honesty."""
+    _, t = run(start=100, n_steps=20)
+    lengths = [len(t.observation_at(i).history["AAPL"].bars) for i in range(20)]
+    assert lengths == [WARMUP + i for i in range(20)]
+    assert t.steps[0].lookback == WARMUP
+    assert t.steps[19].lookback == WARMUP + 19
 
 
 def test_reconstruction_is_exact_at_the_start_of_history():
@@ -62,7 +78,7 @@ def test_reconstruction_is_exact_at_the_start_of_history():
     agent never saw."""
     source, t = run(start=0, n_steps=10)
     for i, step in enumerate(t.steps):
-        expected = source.observe(step.as_of, LOOKBACK)
+        expected = source.observe(step.as_of, step.lookback)
         assert t.observation_at(i).history == expected
         assert len(t.observation_at(i).history["AAPL"].bars) == i + 1
 
@@ -133,7 +149,7 @@ def test_a_sixty_step_transcript_stays_small_enough_to_read():
     read in one context. 500 KB leaves generous headroom over the ~200 KB this
     currently produces while still failing loudly if per-step history returns.
     """
-    _, t = run(start=100, n_steps=60, lookback=60)
+    _, t = run(start=100, n_steps=60, warmup=60)
     size = len(t.model_dump_json())
     assert size < 500_000, f"transcript grew to {size / 1e6:.2f} MB"
 

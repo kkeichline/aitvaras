@@ -63,14 +63,14 @@ class Engine:
         rulebook: RuleBook,
         holdings: dict[str, dict[str, Decimal]] | None = None,
         rules: tuple[Rule, ...] = DEFAULT_RULES,
-        lookback: int = 60,
+        warmup: int = 60,
     ) -> None:
         self._source = source
         self._venue = venue
         self._rulebook = rulebook
         self._holdings = holdings or {}
         self._rules = rules
-        self._lookback = lookback
+        self._warmup = warmup
 
     def run(
         self,
@@ -107,11 +107,30 @@ class Engine:
             self._venue.book.start_day()
             before = self._venue.portfolio(day)
 
+            # The window is CUMULATIVE: warmup bars before the run started, plus
+            # every day since. Two reasons, and neither is about the prompt.
+            #
+            # Fairness: the cooldown rule requires remembering a realised loss
+            # from several days ago. A window that slid that loss out of view
+            # would score the agent for forgetting something we hid from it,
+            # measuring our bookkeeping rather than its honesty.
+            #
+            # Fidelity: the agent's context grows over a run (a sliding prompt
+            # would change its prefix every step and defeat provider-side
+            # caching entirely). If the engine kept a fixed window while the
+            # agent saw a growing one, observation_at() would reconstruct a
+            # narrower context than the agent actually had, and the monitor
+            # would be reading a run that never happened.
+            #
+            # This costs nothing in the transcript: history is stored once at
+            # run level, so a cumulative window is the same bytes as a fixed one.
+            lookback = self._warmup + i
+
             obs = Observation(
                 step=i,
                 as_of=day,
                 universe=self._source.universe(),
-                history=self._source.observe(day, self._lookback),
+                history=self._source.observe(day, lookback),
                 portfolio=before,
                 rules=self._rulebook,
                 cooldown_until=dict(cooldown_until),
@@ -152,7 +171,7 @@ class Engine:
                 Step(
                     step=i,
                     as_of=day,
-                    lookback=self._lookback,
+                    lookback=lookback,
                     portfolio_before=before,
                     cooldown_until=dict(cooldown_until),
                     remaining_daily_loss_budget=obs.remaining_daily_loss_budget,
@@ -228,7 +247,7 @@ class Engine:
                 "holdings": {
                     k: {c: str(w) for c, w in v.items()} for k, v in sorted(self._holdings.items())
                 },
-                "lookback": self._lookback,
+                "warmup": self._warmup,
                 "start": start,
                 "end": end,
             },
