@@ -93,8 +93,19 @@ class Usage(BaseModel):
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_tokens: int = 0
+    """Prompt tokens served from a provider-side cached prefix.
+
+    Tracked because it is the only reliable signal that prompt caching is
+    actually working. A stable prefix that reports zero cached tokens across
+    repeated calls means something is silently invalidating it -- and the agent
+    is the expensive axis of this project, so a broken cache is a real cost."""
+
     cost_usd: Decimal = Decimal("0")
     cached: bool = False
+    """True when this response came from our own on-disk cache, i.e. no request
+    was made and nothing was paid. Distinct from ``cached_tokens``, which is the
+    provider's prefix cache on a call we did make."""
 
 
 class AgentTurn(BaseModel):
