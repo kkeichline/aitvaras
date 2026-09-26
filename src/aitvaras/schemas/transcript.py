@@ -23,11 +23,17 @@ from __future__ import annotations
 import datetime as dt
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from aitvaras.schemas.decision import AgentTurn, Observation, RuleBook
-from aitvaras.schemas.market import PortfolioState
+from aitvaras.schemas.decision import (
+    FORWARD_LOOKING,
+    AgentTurn,
+    Observation,
+    RuleBook,
+)
+from aitvaras.schemas.market import PortfolioState, PriceWindow
 from aitvaras.schemas.violation import Violation
 
 
@@ -85,13 +91,48 @@ class ExecutionResult(BaseModel):
 
 
 class Step(BaseModel):
-    """One trading day, start to finish."""
+    """One trading day, start to finish -- as *persisted*.
+
+    Note what is absent: the price history the agent saw. It is not here.
+
+    Embedding the full ``Observation`` per step was the original design and it
+    was measurably wrong. A 60-step run with a 60-bar lookback over 12 tickers
+    serialized 43,200 bars of which only 1,428 were distinct: a 30x duplication
+    that made a single transcript 4.53 MB / ~1.13M tokens, of which 99% was
+    repeated price tables. No monitor can read that, and phase 3 would have been
+    impossible before it started. The decision content a monitor actually
+    reasons about -- orders, rationales, journal, fills, portfolio deltas -- was
+    50 KB of the 4.53 MB.
+
+    So history lives once on ``RunTranscript.history`` and each step records the
+    ``lookback`` it used. ``RunTranscript.observation_at`` reconstructs exactly
+    what the agent saw, and a test asserts that reconstruction is byte-equal to
+    the live source. Nothing is lost; 22x is saved.
+
+    The other benefit is structural rather than economic. With history held
+    separately, rendering a transcript *for a monitor* becomes a real seam:
+    full history, truncated history, or none at all, chosen per monitor
+    condition. That seam is what open question #6 -- does the monitor get the
+    rules and the prices? -- actually requires, and embedding everything per
+    step would have made it unreachable.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     step: int
     as_of: dt.date
-    observation: Observation
+    """The *decision* date. ``portfolio_after`` is dated the following day,
+    because that is when the orders filled."""
+
+    lookback: int
+    """How many bars of history the agent was shown. With ``as_of``, this is
+    enough to reconstruct the observation from run-level history."""
+
+    portfolio_before: PortfolioState
+    cooldown_until: Annotated[dict[str, dt.date], FORWARD_LOOKING] = Field(default_factory=dict)
+    remaining_daily_loss_budget: Decimal = Decimal("0")
+    halted: bool = False
+
     turn: AgentTurn
     fills: tuple[Fill, ...] = ()
     rejections: tuple[OrderRejection, ...] = ()
@@ -153,9 +194,47 @@ class RunTranscript(BaseModel):
     config_hash: str
     conditions: RunConditions
     rules: RuleBook
+    """Run-level, not per-step. The agent was shown the same rulebook every
+    day, so storing it 60 times bought nothing."""
+
     universe: tuple[str, ...]
+    history: dict[str, PriceWindow] = Field(default_factory=dict)
+    """Every bar any step of this run saw, stored exactly once.
+
+    The union across the run, which makes ``observation_at`` exact: a step's
+    window is 'the last ``lookback`` bars dated at or before ``as_of``', and
+    slicing that out of the union gives back precisely what the source gave.
+    """
+
     steps: tuple[Step, ...]
     score: ScoreCard
+
+    def observation_at(self, step: int) -> Observation:
+        """Rebuild what the agent saw on ``step``, from run-level history.
+
+        This is the inverse of the deduplication, and it is load-bearing: if it
+        drifted from what the engine actually showed the agent, the monitor
+        would be reading a different run than the one that was labelled.
+        ``test_transcript.py`` pins it against the live data source.
+        """
+        record = self.steps[step]
+        window: dict[str, PriceWindow] = {}
+        for ticker, full in self.history.items():
+            bars = tuple(b for b in full.bars if b.date <= record.as_of)
+            if bars:
+                window[ticker] = PriceWindow(ticker=ticker, bars=bars[-record.lookback :])
+
+        return Observation(
+            step=record.step,
+            as_of=record.as_of,
+            universe=self.universe,
+            history=window,
+            portfolio=record.portfolio_before,
+            rules=self.rules,
+            cooldown_until=dict(record.cooldown_until),
+            remaining_daily_loss_budget=record.remaining_daily_loss_budget,
+            halted=record.halted,
+        )
 
 
 class RunLabels(BaseModel):

@@ -189,7 +189,7 @@ def test_buying_while_halted_after_a_loss_breach_is_caught():
     halted = [x for x in art.labels.violations if x.type is ViolationType.MAX_DAILY_LOSS]
     assert halted, "expected at least one down day to trip the halt"
     for v in halted:
-        assert art.transcript.steps[v.step].observation.halted is True
+        assert art.transcript.steps[v.step].halted is True
 
 
 # --------------------------------------------------------------------------
@@ -202,7 +202,7 @@ def test_portfolio_after_is_dated_the_day_the_trade_actually_happened():
     art = build().run(NoopAgent(), CONDITIONS, start=0, n_steps=5)
     for step in art.transcript.steps:
         assert step.portfolio_after.as_of > step.as_of
-        assert step.observation.portfolio.as_of == step.as_of
+        assert step.portfolio_before.as_of == step.as_of
 
 
 def test_the_agent_is_told_the_state_it_needs_to_comply():
@@ -215,7 +215,7 @@ def test_the_agent_is_told_the_state_it_needs_to_comply():
         start=0,
         n_steps=8,
     )
-    later = art.transcript.steps[3].observation
+    later = art.transcript.observation_at(3)
     assert "AAPL" in later.cooldown_until
     assert later.remaining_daily_loss_budget > 0
 
@@ -257,12 +257,14 @@ def test_a_run_cannot_start_where_nothing_can_be_decided():
         build().run(NoopAgent(), CONDITIONS, start=len(source.calendar()), n_steps=5)
 
 
-def test_every_observation_passes_the_lookahead_tripwire():
-    """The engine asserts this on every step; this test proves the steps that
-    reached the transcript were the ones that were checked."""
+def test_every_reconstructed_observation_passes_the_lookahead_tripwire():
+    """The engine checks the live observation; this checks the *reconstructed*
+    one. Both matter: a deduplication bug that pulled in one bar too many would
+    leave the engine's check green while handing every monitor a transcript in
+    which the agent appears to have seen the future."""
     art = build().run(NoopAgent(), CONDITIONS, start=100, n_steps=10)
-    for step in art.transcript.steps:
-        step.observation.assert_no_lookahead()
+    for i in range(len(art.transcript.steps)):
+        art.transcript.observation_at(i).assert_no_lookahead()
 
 
 def test_rejections_are_recorded_rather_than_swallowed():

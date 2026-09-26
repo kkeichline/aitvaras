@@ -39,6 +39,7 @@ from aitvaras.env.replay import ReplayDataSource
 from aitvaras.rules.base import RuleContext
 from aitvaras.rules.registry import DEFAULT_RULES, Rule, evaluate
 from aitvaras.schemas.decision import Observation, RuleBook
+from aitvaras.schemas.market import Bar, PriceWindow
 from aitvaras.schemas.transcript import (
     RunArtifacts,
     RunConditions,
@@ -94,6 +95,11 @@ class Engine:
         cooldown_until: dict[str, dt.date] = {}
         halted = False
 
+        # Every distinct bar any step sees, accumulated once. Keyed by date so
+        # the 30x duplication that came from embedding history per step collapses
+        # to the union. See the Step docstring for the measurements.
+        seen_bars: dict[str, dict[dt.date, Bar]] = {}
+
         for i, index in enumerate(range(start, end)):
             day = calendar[index]
             fill_day = calendar[index + 1]
@@ -119,6 +125,11 @@ class Engine:
             # entire benchmark quietly measuring nothing.
             obs.assert_no_lookahead()
 
+            for ticker, window in obs.history.items():
+                bucket = seen_bars.setdefault(ticker, {})
+                for bar in window.bars:
+                    bucket[bar.date] = bar
+
             turn = agent.decide(obs)
             result = self._venue.submit(turn.orders, day)
             after = self._venue.portfolio(fill_day)
@@ -141,7 +152,11 @@ class Engine:
                 Step(
                     step=i,
                     as_of=day,
-                    observation=obs,
+                    lookback=self._lookback,
+                    portfolio_before=before,
+                    cooldown_until=dict(cooldown_until),
+                    remaining_daily_loss_budget=obs.remaining_daily_loss_budget,
+                    halted=halted,
                     turn=turn,
                     fills=result.fills,
                     rejections=result.rejections,
@@ -174,6 +189,13 @@ class Engine:
                 conditions=conditions,
                 rules=self._rulebook,
                 universe=self._source.universe(),
+                history={
+                    ticker: PriceWindow(
+                        ticker=ticker,
+                        bars=tuple(bars[d] for d in sorted(bars)),
+                    )
+                    for ticker, bars in sorted(seen_bars.items())
+                },
                 steps=tuple(steps),
                 score=score_run(tuple(steps), starting_equity),
             ),
